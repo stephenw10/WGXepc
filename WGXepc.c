@@ -11,6 +11,7 @@
 #include <sys/param.h>
 #include <machine/cpufunc.h>
 #include <machine/sysarch.h>
+#include <kenv.h>
 
 /* W83627 control registers */
 
@@ -33,16 +34,21 @@
 //#define siobase2	0xa05	/* XTM5 SuperIO data address */
 #define gpiobase	0x480	/* standard ICH7, ICH6 and ICH5 address */
 #define gpiobase2	0x4080	/* gpiobase for ICH2 in X-core model */
-#define gpiobase3	0x1c00	/* gpiobase for C226 in M400 model */
+#define gpiobase3	0x1c00	/* gpiobase for C226 in M400/500 model */
 #define parallel_port	0x378 	/* parallel port address in the firebox */
 
-/* Version 1.0 of this program is not significant other than it adds 64bit capability */
-/* Version 1.1 fixed a bug in get_w83627_addr_port left the chip in extended function mode */
-/*	 	Added a function to check the value of the Supio base address and reset it */
-/*		if neccessary on the X-e box. Testing has shown that it can change value  */
-/*		rendering it unreadabel at any address		*/
-/* Version 1.2 Added M400 support */
-/* Version 1.3 Added XTM8 support */
+/* Program History
+ *
+ * Version 1.0 of this program is not significant other than it adds 64bit capability
+ * Version 1.1 fixed a bug in get_w83627_addr_port left the chip in extended function mode
+ *	 	       Added a function to check the value of the Superio base address and reset it
+ *		       if neccessary on the X-e box. Testing has shown that it can change value
+ *		       rendering it unreadabel at any address
+ * Version 1.2 Added M400/500 support
+ * Version 1.3 Added XTM8 support
+ * Version 1.4 Added XTM800/1500 detection
+ *             Added M370/470/570/670 support 
+ */
 
 
 /*
@@ -686,7 +692,7 @@ void config_XTM8_led(void)
 /* Function to display correct program usage */
 void usage(void)
 {
-printf("WGXepc Version 1.3 5/3/2018 stephenw10\n");
+printf("WGXepc Version 1.4 13/8/2019 stephenw10\n");
 printf("WGXepc can accept two arguments:\n");
 printf(" -f (CPU fan) will return the current and minimum fan speed or if followed\n");
 printf("    by a number in hex, 00-FF, will set it.\n");
@@ -706,7 +712,8 @@ printf("Not all functions are supported by all models\n");
 
 int getmodel(void)
 {
-int retval = 0;  
+int retval = 0;
+char product[20];  
 
 /* Look for unique X-e registers */ 
   retval = port_access(0x480);
@@ -813,13 +820,13 @@ int retval = 0;
    printf("open fail\n");
   }
 
-/* Look for unique M400 registers */ 
+/* Look for unique M400/500 registers */ 
   retval = port_access(0x1c00);
   if (retval==0)
   {
 	if (port_in(0x1c00)==0xc3)
 		{
-		printf("Found Firebox M400\n");
+		printf("Found Firebox M400/500\n");
 		return 6;
 		}
     retval = port_deny(0x1c00);
@@ -833,6 +840,50 @@ int retval = 0;
   {
    printf("open fail\n");
   }
+
+/* Look for unique XTM800/1500 registers */ 
+  retval = port_access(0x500);
+  if (retval==0)
+  {
+	if (port_in(0x500)==0xc7)
+		{
+		printf("Found Firebox XTM800/1500\n");
+		return 7;
+		}
+    retval = port_deny(0x500);
+    if (retval==0){}
+    else
+    {
+     printf("close fail\n");
+    }
+  }
+  else
+  {
+   printf("open fail\n");
+  }
+
+/* Look for M370/470/570/670 product ID */ 
+
+  if (kenv(KENV_GET, "smbios.system.product", product, sizeof(product)) > 0) 
+     {
+        //printf("Product is %s\n",product);
+        if (strcmp(product,"NCB-4210WG")==0)
+            {
+            printf("Found Firebox M370/470/570/670.\n");
+            return 8;
+            }           
+     }
+
+/* Check for VBox ;) */
+  if (kenv(KENV_GET, "smbios.system.product", product, sizeof(product)) > 0) 
+     {
+        //printf("Product is %s\n",product);
+        if (strcmp(product,"VirtualBox")==0)
+            {
+            printf("Found VirtualBox.\n");
+            return 42;
+            }           
+     }
   
 return 0;
 }
@@ -861,17 +912,138 @@ if (argc ==1) /*Check that correct number of arguments have been given */
 switch (model)
 {
 
-case 6:		// M400
+case 8:		// M370/470/570/670
 	
 if (strcmp(argv[1],"-b")==0) 
     {
-	printf("The M400 has no LCD\n");
+	printf("The M370/470/570/670 has no LCD\n");
+	return 0;	
+	}
+else	
+if (strcmp(argv[1],"-f")==0) /* All three fans use the CPUfan output on Bank2 */
+    {
+	if (argc==2)  /* Are we looking for the fan speed or setting it */
+	{
+    setw83627(bank_select,0x02); /* Set Bank2 */
+	fanspeed = getw83627(0x09);	/* Current system fan speed register */
+	fanspeed_min = getw83627(0x27); /* T1 fan speed */
+	printf("Current fanspeed is %x, minimum fanspeed is %x\n",fanspeed ,fanspeed_min);
+	}
+	else
+	{
+    setw83627(bank_select,0x02); /* Set Bank2 */
+	setw83627(0x21,0x1e);        /* Set T1 point at 30C */
+	fanspeed_min = strtol(argv[2],NULL,16); /*Convert argument to hex integer*/
+	setw83627(0x27,fanspeed_min);
+	printf("Minimum fanspeed set to %x at 30°C or less\n",fanspeed_min);
+	} 
+	}
+else	
+if (strcmp(argv[1],"-l")==0)
+	{
+			if (argc ==2) /*Check that correct number of arguments have been given */
+			{
+			usage();
+			return 0;
+			}
+                                        /* The NCT6776F in the M370/470/570/670 is compatible with the W83627 */
+			w83627_enter_ext_mode();	/* Enter extended function mode */
+			set_w83627_config(LDR,0x07);		/* Set logial device register to device 7, the LED is on GPIO7 bits 2 and 3*/
+			
+		if (strcmp(argv[2],"red")==0)
+			{
+			set_w83627_config(0xe1,0xfb);		/* Set bit 3 high */
+			}
+	else	if (strcmp(argv[2],"green")==0)
+			{
+			set_w83627_config(0xe1,0xf7);		/* Set bit 2 high */
+			}
+	else	if (strcmp(argv[2],"off")==0)
+			{
+			set_w83627_config(0xe1,0xf3);		/* Set bits 2 and 3 low */			
+			}
+	else	if (strcmp(argv[2],"red_flash")==0)
+			{
+			printf("Flashing is not available on the M370/470/570/670\n");
+			}
+	else	if (strcmp(argv[2],"green_flash")==0)
+			{
+			printf("Flashing is not available on the M370/470/570/670\n");	
+			}
+	else	if (strcmp(argv[2],"red_flash_fast")==0)
+			{
+			printf("Flashing is not available on the M370/470/570/670\n");
+			}
+	else	if (strcmp(argv[2],"green_flash_fast")==0)
+			{
+			printf("Flashing is not available on the M370/470/570/670\n");	
+			}	
+
+	else{
+	usage();
+	}
+	w83627_leave_ext_mode();
+	}
+	else{
+	usage();
+	}
+	
+	break;
+
+
+case 7:		// XTM800/1500
+	
+if (strcmp(argv[1],"-b")==0) 
+    {
+	if (argc==2)  /* Can only set the backlight */
+	{
+	usage();
+	return 0;	
+	}
+	if (strcmp(argv[2],"on")==0)
+		{
+		setbacklight(0x00);   /* Strobe bit on control port is inverted */
+		}
+	else	if (strcmp(argv[2],"off")==0)
+		{
+		setbacklight(0x01);
+		}
+	else 	{
+		usage();
+		return 0;
+		}
+	}
+else	
+if (strcmp(argv[1],"-f")==0) 
+    {
+	printf("There is no fan control on the XTM800/1500 yet\n");
+	return 0;	
+	}
+else	
+if (strcmp(argv[1],"-l")==0) 
+    {
+	printf("There is no LED control on the XTM800/1500 yet\n");
+	return 0;	
+	}
+else
+    {
+	usage();
+	}
+	
+break;
+
+
+case 6:		// M400/500
+	
+if (strcmp(argv[1],"-b")==0) 
+    {
+	printf("The M400/500 has no LCD\n");
 	return 0;	
 	}
 else	
 if (strcmp(argv[1],"-f")==0) 
     {
-	printf("There is no fan control on the M400 yet\n");
+	printf("There is no fan control on the M400/500 yet\n");
 	return 0;	
 	}
 else	
@@ -882,7 +1054,7 @@ if (strcmp(argv[1],"-l")==0)
 			usage();
 			return 0;
 			}
-                                        /* The NCT6776F in the M400 is compatible with the W83627 */
+                                        /* The NCT6776F in the M400/500 is compatible with the W83627 */
 			w83627_enter_ext_mode();	/* Enter extended function mode */
 			set_w83627_config(LDR,0x07);		/* Set logial device register to device 7, the LED is on GPIO7 bits 2 and 3*/
 			
@@ -901,19 +1073,19 @@ if (strcmp(argv[1],"-l")==0)
 
 	else	if (strcmp(argv[2],"red_flash")==0)
 			{
-			printf("Flashing is not available on the M400\n");
+			printf("Flashing is not available on the M400/500\n");
 			}
 	else	if (strcmp(argv[2],"green_flash")==0)
 			{
-			printf("Flashing is not available on the M400\n");	
+			printf("Flashing is not available on the M400/500\n");	
 			}
 	else	if (strcmp(argv[2],"red_flash_fast")==0)
 			{
-			printf("Flashing is not available on the M400\n");
+			printf("Flashing is not available on the M400/500\n");
 			}
 	else	if (strcmp(argv[2],"green_flash_fast")==0)
 			{
-			printf("Flashing is not available on the M400\n");	
+			printf("Flashing is not available on the M400/500\n");	
 			}	
 
 	else{
@@ -1424,4 +1596,3 @@ case 0:
 				
 return 0;
 }
-
