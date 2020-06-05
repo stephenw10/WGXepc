@@ -48,6 +48,7 @@
  * Version 1.3 Added XTM8 support
  * Version 1.4 Added XTM800/1500 detection
  *             Added M370/470/570/670 support 
+ * Version 1.5 Added M270 support
  */
 
 
@@ -692,7 +693,7 @@ void config_XTM8_led(void)
 /* Function to display correct program usage */
 void usage(void)
 {
-printf("WGXepc Version 1.4 13/8/2019 stephenw10\n");
+printf("WGXepc Version 1.5 5/6/2020 stephenw10\n");
 printf("WGXepc can accept two arguments:\n");
 printf(" -f (CPU fan) will return the current and minimum fan speed or if followed\n");
 printf("    by a number in hex, 00-FF, will set it.\n");
@@ -874,6 +875,27 @@ char product[20];
             }           
      }
 
+/* Look for unique M270 registers */ 
+  retval = port_access_multiple(0x80,8);
+  if (retval==0)
+  {
+	if ((port_in(0x80)==0xaa)&&(port_in(0x84)==0x00)&&(port_in(0x88)==0x00))
+		{
+		printf("Found Firebox M270\n");
+		return 9;
+		}
+    retval = port_deny_multiple(0x80,8);
+    if (retval==0){}
+    else
+    {
+     printf("close fail\n");
+    }
+  }
+  else
+  {
+   printf("open fail\n");
+  }
+
 /* Check for VBox ;) */
   if (kenv(KENV_GET, "smbios.system.product", product, sizeof(product)) > 0) 
      {
@@ -911,6 +933,85 @@ if (argc ==1) /*Check that correct number of arguments have been given */
 
 switch (model)
 {
+
+case 9:		// M270
+	
+if (strcmp(argv[1],"-b")==0) 
+    {
+	printf("The M270 has no LCD\n");
+	return 0;	
+	}
+else	
+if (strcmp(argv[1],"-f")==0) /* The fan uses the CPUfan output on Bank2 */
+    {
+	if (argc==2)  /* Are we looking for the fan speed or setting it */
+	{
+    setw83627(bank_select,0x02); /* Set Bank2 */
+	fanspeed = getw83627(0x09);	/* Current system fan speed register */
+	fanspeed_min = getw83627(0x27); /* T1 fan speed */
+	printf("Current fanspeed is %x, minimum fanspeed is %x\n",fanspeed ,fanspeed_min);
+	}
+	else
+	{
+    setw83627(bank_select,0x02); /* Set Bank2 */
+	setw83627(0x21,0x1e);        /* Set T1 point at 30C */
+	setw83627(0x22,0x2d);        /* Set T2 point at 45C */
+	fanspeed_min = strtol(argv[2],NULL,16); /*Convert argument to hex integer*/
+	setw83627(0x27,fanspeed_min);
+	printf("Minimum fanspeed set to %x at 30°C or less\n",fanspeed_min);
+	} 
+	}
+else	
+if (strcmp(argv[1],"-l")==0)
+	{
+			if (argc ==2) /*Check that correct number of arguments have been given */
+			{
+			usage();
+			return 0;
+			}
+                                        /* The NCT6776F in the M270 is compatible with the W83627 */
+			w83627_enter_ext_mode();	/* Enter extended function mode */
+			set_w83627_config(LDR,0x07);		/* Set logial device register to device 7, the LED is on GPIO7 bits 2 and 3*/
+			
+		if (strcmp(argv[2],"red")==0)
+			{
+			set_w83627_config(0xe1,0xf9);		/* Set bit 3 high */
+			}
+	else	if (strcmp(argv[2],"green")==0)
+			{
+			set_w83627_config(0xe1,0xf5);		/* Set bit 2 high */
+			}
+	else	if (strcmp(argv[2],"off")==0)
+			{
+			set_w83627_config(0xe1,0xf1);		/* Set bits 2 and 3 low */			
+			}
+	else	if (strcmp(argv[2],"red_flash")==0)
+			{
+			printf("Flashing is not available on the M270\n");
+			}
+	else	if (strcmp(argv[2],"green_flash")==0)
+			{
+			printf("Flashing is not available on the M270\n");	
+			}
+	else	if (strcmp(argv[2],"red_flash_fast")==0)
+			{
+			printf("Flashing is not available on the M270\n");
+			}
+	else	if (strcmp(argv[2],"green_flash_fast")==0)
+			{
+			printf("Flashing is not available on the M270\n");	
+			}	
+
+	else{
+	usage();
+	}
+	w83627_leave_ext_mode();
+	}
+	else{
+	usage();
+	}
+	
+	break;
 
 case 8:		// M370/470/570/670
 	
