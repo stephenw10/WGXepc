@@ -49,6 +49,9 @@
  * Version 1.4 Added XTM800/1500 detection
  *             Added M370/470/570/670 support 
  * Version 1.5 Added M270 support
+ * Version 1.6 Added M400 fan control for those who have not flashed the BIOS
+ *             Added T70 detection 
+ * Version 1.6_1 Fixed M400 fan control
  */
 
 
@@ -693,7 +696,7 @@ void config_XTM8_led(void)
 /* Function to display correct program usage */
 void usage(void)
 {
-printf("WGXepc Version 1.5 5/6/2020 stephenw10\n");
+printf("WGXepc Version 1.6_1 22/11/2020 stephenw10\n");
 printf("WGXepc can accept two arguments:\n");
 printf(" -f (CPU fan) will return the current and minimum fan speed or if followed\n");
 printf("    by a number in hex, 00-FF, will set it.\n");
@@ -896,6 +899,18 @@ char product[20];
    printf("open fail\n");
   }
 
+/* Look for T70 product ID */ 
+
+  if (kenv(KENV_GET, "smbios.planar.product", product, sizeof(product)) > 0) 
+     {
+        //printf("Product is %s\n",product);
+        if (strcmp(product,"T70")==0)
+            {
+            printf("Found Firebox T70.\n");
+            return 10;
+            }           
+     }
+
 /* Check for VBox ;) */
   if (kenv(KENV_GET, "smbios.system.product", product, sizeof(product)) > 0) 
      {
@@ -933,6 +948,32 @@ if (argc ==1) /*Check that correct number of arguments have been given */
 
 switch (model)
 {
+
+case 10:	// T70
+	
+if (strcmp(argv[1],"-b")==0) 
+    {
+	printf("There is no LCD on the T70\n");
+	return 0;	
+	}
+else	
+if (strcmp(argv[1],"-f")==0) 
+    {
+	printf("There is no fan on the T70\n");
+	return 0;	
+	}
+else	
+if (strcmp(argv[1],"-l")==0) 
+    {
+	printf("There is no LED control on the T70 yet\n");
+	return 0;	
+	}
+else
+    {
+	usage();
+	}
+	
+break;
 
 case 9:		// M270
 	
@@ -1142,10 +1183,25 @@ if (strcmp(argv[1],"-b")==0)
 	return 0;	
 	}
 else	
-if (strcmp(argv[1],"-f")==0) 
+if (strcmp(argv[1],"-f")==0) /* Both fans use the CPU fan output on Bank2 */
     {
-	printf("There is no fan control on the M400/500 yet\n");
-	return 0;	
+	if (argc==2)  /* Are we looking for the fan speed or setting it */
+	{
+    setw83627(bank_select,0x02); /* Set Bank2 */
+	fanspeed = getw83627(0x09);	/* Current system fan speed register */
+	fanspeed_min = getw83627(0x27); /* T1 fan speed */
+	printf("Current fanspeed is %x, minimum fanspeed is %x\n",fanspeed ,fanspeed_min);
+	}
+	else
+	{
+    setw83627(bank_select,0x02); /* Set Bank2 */
+	setw83627(0x21,0x2d);        /* Set T1 point at 45C */
+	setw83627(0x22,0x37);        /* Set T2 point at 55C */
+	setw83627(0x28,0x3c);        /* Set T2 fan speed to 0x3c */
+	fanspeed_min = strtol(argv[2],NULL,16); /*Convert argument to hex integer*/
+	setw83627(0x27,fanspeed_min);
+	printf("Minimum fanspeed set to %x at 45°C or less\n",fanspeed_min);
+	} 
 	}
 else	
 if (strcmp(argv[1],"-l")==0)
